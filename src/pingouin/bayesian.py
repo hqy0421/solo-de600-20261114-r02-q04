@@ -1,0 +1,473 @@
+"""Bayesian functions."""
+
+import warnings
+from math import exp, lgamma, log, pi
+
+import numpy as np
+from scipy.integrate import quad
+
+from .utils import _check_alternative, _check_choice, _check_confidence, _check_real, _is_installed
+
+__all__ = ["bayesfactor_ttest", "bayesfactor_pearson", "bayesfactor_binom"]
+
+
+def bayesfactor_ttest(t, nx, ny=None, paired=False, alternative="two-sided", r=0.707):
+    """
+    Bayes Factor of a T-test.
+
+    Parameters
+    ----------
+    t : float
+        T-value of the T-test
+    nx : int
+        Sample size of first group
+    ny : int
+        Sample size of second group (only needed in case of an independent
+        two-sample T-test)
+    paired : boolean
+        Specify whether the two observations are related (i.e. repeated
+        measures) or independent.
+    alternative : string
+        Defines the alternative hypothesis, or tail of the test. As of Pingouin 0.6.x, only
+        "two-sided" is supported.
+    r : float
+        Cauchy scale factor. Smaller values of ``r`` (e.g. 0.5), may be
+        appropriate when small effect sizes are expected a priori; larger
+        values of ``r`` are appropriate when large effect sizes are
+        expected (Rouder et al 2009). The default is
+        :math:`\\sqrt{2} / 2 \\approx 0.707`.
+
+    Returns
+    -------
+    bf : float
+        Scaled Jeffrey-Zellner-Siow (JZS) Bayes Factor (BF10).
+        The Bayes Factor quantifies the evidence in favour of the
+        alternative hypothesis.
+
+    See Also
+    --------
+    ttest : T-test
+    pairwise_tests : Pairwise T-tests
+    bayesfactor_pearson : Bayes Factor of a correlation
+    bayesfactor_binom : Bayes Factor of a binomial test
+
+    Notes
+    -----
+    Adapted from a Matlab code found at
+    https://github.com/anne-urai/Tools/tree/master/stats/BayesFactors
+
+    If you would like to compute the Bayes Factor directly from the raw data
+    instead of from the T-value, use the :py:func:`pingouin.ttest` function.
+
+    The JZS Bayes Factor is approximated using the formula described
+    in ref [1]_:
+
+    .. math::
+
+        \\text{BF}_{10} = \\frac{\\int_{0}^{\\infty}(1 + Ngr^2)^{-1/2}
+        (1 + \\frac{t^2}{v(1 + Ngr^2)})^{-(v+1) / 2}(2\\pi)^{-1/2}g^
+        {-3/2}e^{-1/2g}}{(1 + \\frac{t^2}{v})^{-(v+1) / 2}}
+
+    where :math:`t` is the T-value, :math:`v` the degrees of freedom,
+    :math:`N` the sample size, :math:`r` the Cauchy scale factor
+    (= prior on effect size) and :math:`g` is is an auxiliary variable
+    that is integrated out numerically.
+
+    Results have been validated against JASP and the BayesFactor R package.
+
+    References
+    ----------
+    .. [1] Rouder, J.N., Speckman, P.L., Sun, D., Morey, R.D., Iverson, G.,
+       2009. Bayesian t tests for accepting and rejecting the null hypothesis.
+       Psychon. Bull. Rev. 16, 225–237. https://doi.org/10.3758/PBR.16.2.225
+
+    Examples
+    --------
+    1. Bayes Factor of an independent two-sample T-test
+
+    >>> from pingouin import bayesfactor_ttest
+    >>> bf = bayesfactor_ttest(3.5, 20, 20)
+    >>> print("Bayes Factor: %.3f (two-sample independent)" % bf)
+    Bayes Factor: 26.743 (two-sample independent)
+
+    2. Bayes Factor of a paired two-sample T-test
+
+    >>> bf = bayesfactor_ttest(3.5, 20, 20, paired=True)
+    >>> print("Bayes Factor: %.3f (two-sample paired)" % bf)
+    Bayes Factor: 17.185 (two-sample paired)
+    """
+    # Check tail
+    if alternative != "two-sided":
+        raise ValueError(
+            "Alternative must be 'two-sided' (default). One-sided tests are not supported."
+        )
+    one_sample = ny is None or ny == 1
+
+    # Check T-value
+    _check_real(t, "t")
+    if not np.isfinite(t):
+        return np.nan
+
+    # Function to be integrated
+    def fun(g, t, n, r, df):
+        return (
+            (1 + n * g * r**2) ** (-0.5)
+            * (1 + t**2 / ((1 + n * g * r**2) * df)) ** (-(df + 1) / 2)
+            * (2 * pi) ** (-0.5)
+            * g ** (-3.0 / 2)
+            * exp(-1 / (2 * g))
+        )
+
+    # Define n and degrees of freedom
+    if one_sample or paired:
+        n = nx
+        df = n - 1
+    else:
+        n = nx * ny / (nx + ny)
+        df = nx + ny - 2
+
+    # JZS Bayes factor calculation: eq. 1 in Rouder et al. (2009)
+    integr = quad(fun, 0, np.inf, args=(t, n, r, df))[0]
+    with np.errstate(divide="ignore"):
+        bf10 = 1 / ((1 + t**2 / df) ** (-(df + 1) / 2) / integr)
+
+    return bf10
+
+
+def bayesfactor_pearson(r, n, alternative="two-sided", method="ly", kappa=1.0):
+    """
+    Bayes Factor of a Pearson correlation.
+
+    Parameters
+    ----------
+    r : float
+        Pearson correlation coefficient.
+    n : int
+        Sample size.
+    alternative : string
+        Defines the alternative hypothesis, or tail of the correlation. Must be one of
+        "two-sided" (default), "greater" or "less". Both "greater" and "less" return a one-sided
+        p-value. "greater" tests against the alternative hypothesis that the correlation is
+        positive (greater than zero), "less" tests against the hypothesis that the correlation is
+        negative.
+    method : str
+        Method to compute the Bayes Factor. Can be "ly" (default) or
+        "wetzels". The former has an exact analytical solution, while the
+        latter requires integral solving (and is therefore slower). "wetzels"
+        was the default in Pingouin <= 0.2.5. See Notes for details.
+    kappa : float
+        Kappa factor. This is sometimes called the *rscale* parameter, and
+        is only used when ``method`` is "ly".
+
+    Returns
+    -------
+    bf : float
+        Bayes Factor (BF10).
+        The Bayes Factor quantifies the evidence in favour of the alternative
+        hypothesis.
+
+    See Also
+    --------
+    corr : (Robust) correlation between two variables
+    pairwise_corr : Pairwise correlation between columns of a pandas DataFrame
+    bayesfactor_ttest : Bayes Factor of a T-test
+    bayesfactor_binom : Bayes Factor of a binomial test
+
+    Notes
+    -----
+    To compute the Bayes Factor directly from the raw data, use the
+    :py:func:`pingouin.corr` function.
+
+    The two-sided **Wetzels Bayes Factor** (also called *JZS Bayes Factor*)
+    is calculated using the equation 13 and associated R code of [1]_:
+
+    .. math::
+
+        \\text{BF}_{10}(n, r) = \\frac{\\sqrt{n/2}}{\\gamma(1/2)}*
+        \\int_{0}^{\\infty}e((n-2)/2)*
+        log(1+g)+(-(n-1)/2)log(1+(1-r^2)*g)+(-3/2)log(g)-n/2g
+
+    where :math:`n` is the sample size, :math:`r` is the Pearson correlation
+    coefficient and :math:`g` is is an auxiliary variable that is integrated
+    out numerically. Since the Wetzels Bayes Factor requires solving an
+    integral, it is slower than the analytical solution described below.
+
+    The two-sided **Ly Bayes Factor** (also called *Jeffreys
+    exact Bayes Factor*) is calculated using equation 25 of [2]_:
+
+    .. math::
+
+        \\text{BF}_{10;k}(n, r) = \\frac{2^{\\frac{k-2}{k}}\\sqrt{\\pi}}
+        {\\beta(\\frac{1}{k}, \\frac{1}{k})} \\cdot
+        \\frac{\\Gamma(\\frac{2+k(n-1)}{2k})}{\\Gamma(\\frac{2+nk}{2k})}
+        \\cdot 2F_1(\\frac{n-1}{2}, \\frac{n-1}{2}, \\frac{2+nk}{2k}, r^2)
+
+    The one-sided version is described in eq. 27 and 28 of Ly et al, 2016.
+    Please take note that the one-sided test requires the
+    `mpmath <http://mpmath.org/>`_ package.
+
+    Results have been validated against JASP and the BayesFactor R package.
+
+    References
+    ----------
+    .. [1] Ly, A., Verhagen, J. & Wagenmakers, E.-J. Harold Jeffreys’s default
+       Bayes factor hypothesis tests: Explanation, extension, and
+       application in psychology. J. Math. Psychol. 72, 19–32 (2016).
+
+    .. [2] Wetzels, R. & Wagenmakers, E.-J. A default Bayesian hypothesis test
+       for correlations and partial correlations. Psychon. Bull. Rev. 19,
+       1057–1064 (2012).
+
+    Examples
+    --------
+    Bayes Factor of a Pearson correlation
+
+    >>> from pingouin import bayesfactor_pearson
+    >>> r, n = 0.6, 20
+    >>> bf = bayesfactor_pearson(r, n)
+    >>> print("Bayes Factor: %.3f" % bf)
+    Bayes Factor: 10.634
+
+    Compare to Wetzels method:
+
+    >>> bf = bayesfactor_pearson(r, n, method="wetzels")
+    >>> print("Bayes Factor: %.3f" % bf)
+    Bayes Factor: 8.221
+
+    One-sided test
+
+    >>> bf10pos = bayesfactor_pearson(r, n, alternative="greater")
+    >>> bf10neg = bayesfactor_pearson(r, n, alternative="less")
+    >>> print("BF-pos: %.3f, BF-neg: %.3f" % (bf10pos, bf10neg))
+    BF-pos: 21.185, BF-neg: 0.082
+    """
+    from scipy.special import betaln, gamma, hyp2f1
+
+    method = method.lower()
+    _check_choice(method, ["ly", "wetzels"], "method")
+    _check_alternative(alternative)
+
+    # Wrong input
+    if not np.isfinite(r) or n < 2:
+        return np.nan
+    if not (-1 <= r <= 1):
+        raise ValueError("r must be between -1 and 1.")
+
+    if alternative != "two-sided" and method == "wetzels":
+        warnings.warn(
+            "One-sided Bayes Factor are not supported by the "
+            "Wetzels's method. Switching to method='ly'.",
+            stacklevel=2,
+        )
+        method = "ly"
+
+    if method == "wetzels":
+        # Wetzels & Wagenmakers, 2012. Integral solving
+
+        def fun(g, r, n):
+            return exp(
+                ((n - 2) / 2) * log(1 + g)
+                + (-(n - 1) / 2) * log(1 + (1 - r**2) * g)
+                + (-3 / 2) * log(g)
+                + -n / (2 * g)
+            )
+
+        integr = quad(fun, 0, np.inf, args=(r, n))[0]
+        bf10 = np.sqrt(n / 2) / gamma(1 / 2) * integr
+
+    elif alternative == "two-sided":
+        # Ly et al, 2016. Analytical solution.
+        k = kappa
+        lbeta = betaln(1 / k, 1 / k)
+        log_hyperterm = log(hyp2f1(((n - 1) / 2), ((n - 1) / 2), ((n + 2 / k) / 2), r**2))
+        bf10 = exp(
+            (1 - 2 / k) * log(2)
+            + 0.5 * log(pi)
+            - lbeta
+            + lgamma((n + 2 / k - 1) / 2)
+            - lgamma((n + 2 / k) / 2)
+            + log_hyperterm
+        )
+
+    else:
+        # Directional test (Ly et al, 2016).
+        # We need mpmath for the generalized hypergeometric function.
+        # The two-sided bf10 is also computed in mpmath to avoid catastrophic cancellation
+        # when bf10pos or bf10neg is much smaller than bf10 (e.g. large |r|
+        # with the "wrong" sign). See https://github.com/raphaelvallat/pingouin/issues/427
+        _is_installed("mpmath", raise_error=True)
+        import mpmath
+
+        mp_k = mpmath.mpf(kappa)
+        mp_n = mpmath.mpf(n)
+        mp_r = mpmath.mpf(r)
+
+        # Two-sided bf10 in mpmath precision (eq. 25 of Ly et al., 2016)
+        mp_lbeta = mpmath.log(mpmath.beta(1 / mp_k, 1 / mp_k))
+        mp_log_hyperterm = mpmath.log(
+            mpmath.hyp2f1((mp_n - 1) / 2, (mp_n - 1) / 2, (mp_n + 2 / mp_k) / 2, mp_r**2)
+        )
+        bf10_mp = mpmath.exp(
+            (1 - 2 / mp_k) * mpmath.log(2)
+            + mpmath.log(mpmath.pi) / 2
+            - mp_lbeta
+            + mpmath.loggamma((mp_n + 2 / mp_k - 1) / 2)
+            - mpmath.loggamma((mp_n + 2 / mp_k) / 2)
+            + mp_log_hyperterm
+        )
+
+        # Compute the directional correction term C (eq. 27-28 of Ly et al., 2016)
+        hyper_term_mp = mpmath.hyp3f2(
+            1,
+            mp_n / 2,
+            mp_n / 2,
+            mpmath.mpf(3) / 2,
+            (2 + mp_k * (mp_n + 1)) / (2 * mp_k),
+            mp_r**2,
+        )
+        mp_log_term = 2 * (mpmath.loggamma(mp_n / 2) - mpmath.loggamma((mp_n - 1) / 2)) - mp_lbeta
+        C_mp = (
+            mpmath.power(2, (3 * mp_k - 2) / mp_k)
+            * mp_k
+            * mp_r
+            / (2 + (mp_n - 1) * mp_k)
+            * mpmath.exp(mp_log_term)
+            * hyper_term_mp
+        )
+
+        bf10neg_mp = bf10_mp - C_mp
+        bf10pos_mp = bf10_mp + C_mp
+        if alternative == "greater":
+            # We expect the correlation to be positive
+            bf10 = float(max(bf10pos_mp, mpmath.mpf(0)))
+        else:
+            # We expect the correlation to be negative
+            bf10 = float(max(bf10neg_mp, mpmath.mpf(0)))
+
+    return bf10
+
+
+def bayesfactor_binom(k, n, p=0.5, a=1, b=1):
+    """
+    Bayes factor of a binomial test with :math:`k` successes,
+    :math:`n` trials and base probability :math:`p`.  This means that
+    the null hypothesis is that the probability is :math:`p`.  It is
+    compared against the alternative hypothesis that :math:`p` is from
+    the Beta distribution with parameters :math:`(a, b)`.  By default,
+    both :math:`a` and :math:`b` are 1, making the alternative
+    hypothesis equivalent to the uniform distribution, i.e., we are
+    completely uninformed about :math:`p`.
+
+    Parameters
+    ----------
+    k : int
+        Number of successes.
+    n : int
+        Number of trials.
+    p : float
+        Base probability of success (range from 0 to 1).
+    a : float
+        The "a" parameter of the Beta distribution.
+    b : float
+        The "b" parameter of the Beta distribution.
+
+    Returns
+    -------
+    bf10 : float
+        The Bayes Factor quantifies the evidence in favour of the
+        alternative hypothesis, where the null hypothesis is that
+        the random variable is binomially distributed with base probability
+        :math:`p`.
+
+    See Also
+    --------
+    bayesfactor_pearson : Bayes Factor of a correlation
+    bayesfactor_ttest : Bayes Factor of a T-test
+
+    Notes
+    -----
+    Adapted from a Matlab code found at
+    https://github.com/anne-urai/Tools/blob/master/stats/BayesFactors/binombf.m
+
+    The Bayes Factor is given by the formula below:
+
+    .. math::
+
+        BF_{10} = \\frac{\\int_0^1 \\binom{n}{k}g^k(1-g)^{n-k}}
+        {\\binom{n}{k} p^k (1-p)^{n-k}}
+
+    References
+    ----------
+    .. [1] https://en.wikipedia.org/wiki/Bayes_factor
+
+    Examples
+    --------
+    We want to determine if a coin if fair. After tossing the coin 200 times
+    in a row, we report 115 heads (hereafter referred to as "successes") and 85
+    tails ("failures"). The Bayes Factor can be easily computed using Pingouin:
+
+    >>> import pingouin as pg
+    >>> bf = float(pg.bayesfactor_binom(k=115, n=200, p=0.5))
+    >>> # Note that Pingouin returns the BF-alt by default.
+    >>> # BF-null is simply 1 / BF-alt
+    >>> print("BF-null: %.3f, BF-alt: %.3f" % (1 / bf, bf))
+    BF-null: 1.197, BF-alt: 0.835
+
+    Since the Bayes Factor of the null hypothesis ("the coin is fair") is
+    higher than the Bayes Factor of the alternative hypothesis
+    ("the coin is not fair"), we can conclude that there is more evidence to
+    support the fact that the coin is indeed fair. However, the strength of the
+    evidence in favor of the null hypothesis (1.197) is "barely worth
+    mentionning" according to Jeffreys's rule of thumb.
+
+    Interestingly, a frequentist alternative to this test would give very
+    different results. It can be performed using the
+    :py:func:`scipy.stats.binomtest` function:
+
+    >>> from scipy.stats import binomtest
+    >>> result = binomtest(k=115, n=200, p=0.5)
+    >>> round(result.pvalue, 5)
+    0.04004
+
+    The binomial test rejects the null hypothesis that the coin is fair at the
+    5% significance level (p=0.04). Thus, whereas a frequentist hypothesis test
+    would yield significant results at the 5% significance level, the Bayes
+    factor indicates preference of the null hypothesis to the alternative
+    hypothesis that we know nothing about p.
+
+    We can use a more informed alternative hypothesis too, if desirable.  E.g.,
+    the original test using Beta(5, 4) as the alternative hypothesis:
+
+    >>> bf = pg.bayesfactor_binom(k=115, n=200, p=0.5, a=5, b=4)
+    >>> print("Bayes Factor: %.3f" % bf)
+    Bayes Factor: 1.930
+
+    Using a different base probability of successes:
+
+    >>> bf = pg.bayesfactor_binom(k=100, n=1000, p=0.1)
+    >>> print("Bayes Factor: %.3f" % bf)
+    Bayes Factor: 0.024
+    """
+    from scipy.stats import betabinom, binom
+
+    _check_confidence(p, name="p")
+    _check_real(k, "k", integer=True)
+    _check_real(n, "n", integer=True)
+    _check_real(a, "a")
+    _check_real(b, "b")
+    if k < 0:
+        raise ValueError("k (successes) must be positive or zero.")
+    if n <= 0:
+        raise ValueError("n (trials) must be positive.")
+    if k > n:
+        raise ValueError("k (successes) cannot be higher than n (trials).")
+    # ``not (x > 0)`` rather than ``x <= 0`` so that NaN is rejected too
+    if not (a > 0):
+        raise ValueError("a must be positive.")
+    if not (b > 0):
+        raise ValueError("b must be positive.")
+
+    # The marginal likelihood under the alternative, i.e. the integral of the binomial likelihood
+    # over the Beta(a, b) prior, is the beta-binomial probability mass function.
+    bf10 = betabinom.pmf(k, n, a, b) / binom.pmf(k, n, p)
+    return bf10

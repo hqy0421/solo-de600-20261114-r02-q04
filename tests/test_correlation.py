@@ -1,0 +1,422 @@
+"""Test correlation.py.
+
+See the R/test_correlation.R file.
+"""
+
+from itertools import product
+
+import numpy as np
+import pandas as pd
+import pytest
+from pandas.testing import assert_frame_equal
+from scipy.stats import kendalltau, pearsonr, spearmanr
+from statsmodels.stats.multitest import multipletests
+
+from pingouin import read_dataset
+from pingouin.correlation import (
+    _bicor,
+    _skipped,
+    corr,
+    distance_corr,
+    partial_corr,
+    rcorr,
+    rm_corr,
+)
+
+
+def test_corr():
+    """Test function corr
+
+    Compare to R `correlation` package. See test_correlation.R file.
+    """
+    rng = np.random.RandomState(123)
+    mean, cov = [4, 6], [(1, 0.6), (0.6, 1)]
+    x, y = rng.multivariate_normal(mean, cov, 30).T
+    x2, y2 = x.copy(), y.copy()
+    x[3], y[5] = 12, -8
+    x2[3], y2[5] = 7, 2.6
+
+    # Pearson correlation
+    stats = corr(x, y, method="pearson")
+    assert np.isclose(stats.loc["pearson", "r"], 0.1761221)
+    assert np.isclose(stats.loc["pearson", "p_val"], 0.3518659)
+    assert stats.loc["pearson", "CI95"][0] == round(-0.1966232, 2)
+    assert stats.loc["pearson", "CI95"][1] == round(0.5043872, 2)
+    # - One-sided: greater
+    stats = corr(x, y, method="pearson", alternative="greater")
+    assert np.isclose(stats.loc["pearson", "r"], 0.1761221)
+    assert np.isclose(stats.loc["pearson", "p_val"], 0.175933)
+    assert stats.loc["pearson", "CI95"][0] == round(-0.1376942, 2)
+    assert stats.loc["pearson", "CI95"][1] == 1
+    # - One-sided: less
+    stats = corr(x, y, method="pearson", alternative="less")
+    assert np.isclose(stats.loc["pearson", "r"], 0.1761221)
+    assert np.isclose(stats.loc["pearson", "p_val"], 0.824067)
+    assert stats.loc["pearson", "CI95"][0] == -1
+    assert stats.loc["pearson", "CI95"][1] == round(0.4578044, 2)
+
+    # Spearman correlation
+    stats = corr(x, y, method="spearman")
+    assert np.isclose(stats.loc["spearman", "r"], 0.4740823)
+    assert np.isclose(stats.loc["spearman", "p_val"], 0.008129768)
+    # CI are calculated using a different formula for Spearman in R
+    # assert stats.loc['spearman', 'CI95'][0] == round(0.1262988, 2)
+    # assert stats.loc['spearman', 'CI95'][1] == round(0.7180799, 2)
+
+    # Kendall correlation
+    # R uses a different estimation method than scipy for the p-value
+    stats = corr(x, y, method="kendall")
+    assert np.isclose(stats.loc["kendall", "r"], 0.3517241)
+    # Skipped correlation -- compare with robust corr toolbox
+    # https://sourceforge.net/projects/robustcorrtool/
+    with pytest.warns(UserWarning, match="skipped correlation relies"):
+        stats = corr(x, y, method="skipped")
+    assert round(stats.loc["skipped", "r"], 4) == 0.5123
+    assert stats.loc["skipped", "outliers"] == 2
+    # The exact values fail in sklearn ≥1.8, see
+    # https://github.com/scikit-learn/scikit-learn/issues/23162. Expected with older versions:
+    # r=0.5123 (spearman) and r=0.5254 (pearson), with 2 outliers.
+    sk_sp = corr(x2, y2, method="skipped")
+    sk_pe = corr(x2, y2, method="skipped", corr_type="pearson")
+    for stats in [sk_sp, sk_pe]:
+        assert stats.at["skipped", "n"] == 30
+        assert -1 <= stats.at["skipped", "r"] <= 1
+        assert 0 <= stats.at["skipped", "p_val"] <= 1
+        assert 0 <= stats.at["skipped", "outliers"] < 30
+    # Shepherd: seed=123 draws the same bootstrap samples as np.random.seed(123)
+    stats = corr(x, y, method="shepherd", seed=123)
+    np.random.seed(123)
+    assert_frame_equal(corr(x, y, method="shepherd"), stats)
+    assert_frame_equal(corr(x, y, method="shepherd", seed=123), stats)
+    assert np.isclose(stats.loc["shepherd", "r"], 0.5123153)
+    assert np.isclose(stats.loc["shepherd", "p_val"], 0.005316)
+    assert stats.loc["shepherd", "outliers"] == 2
+    _, _, outliers = _skipped(x, y, corr_type="pearson")
+    assert outliers.size == x.size
+    assert stats.loc["shepherd", "n"] == 30
+    # Percbend -- compare with robust corr toolbox
+    stats = corr(x, y, method="percbend")
+    assert round(stats.loc["percbend", "r"], 4) == 0.4843
+    assert np.isclose(stats.loc["percbend", "r"], 0.4842686)
+    assert np.isclose(stats.loc["percbend", "p_val"], 0.006693313)
+    stats = corr(x2, y2, method="percbend")
+    assert round(stats.loc["percbend", "r"], 4) == 0.4843
+    stats = corr(x, y, method="percbend", beta=0.5)
+    assert round(stats.loc["percbend", "r"], 4) == 0.4848
+    # Compare biweight correlation to astropy
+    stats = corr(x, y, method="bicor")
+    assert np.isclose(stats.loc["bicor", "r"], 0.4951418)
+    assert np.isclose(stats.loc["bicor", "p_val"], 0.005403701)
+    assert stats.loc["bicor", "CI95"][0] == round(0.1641553, 2)
+    assert stats.loc["bicor", "CI95"][1] == round(0.7259185, 2)
+    stats = corr(x, y, method="bicor", c=5)
+    assert np.isclose(stats.loc["bicor", "r"], 0.4940706950017)
+    # Not normally distributed
+    z = rng.uniform(size=30)
+    stats = corr(x, z, method="pearson")
+    assert np.allclose(stats.loc["pearson", ["r", "p_val"]], pearsonr(x, z))
+    # With NaN values: the pair is removed
+    x[3] = np.nan
+    stats = corr(x, y)
+    assert stats.at["pearson", "n"] == 29
+    assert np.isclose(stats.at["pearson", "r"], pearsonr(np.delete(x, 3), np.delete(y, 3))[0])
+    # With the same array
+    # Disabled because of AppVeyor failure
+    # assert corr(x, x).loc['pearson', 'BF10'] == str(np.inf)
+    # Wrong argument
+    with pytest.raises(ValueError):
+        corr(x, y, method="error")
+    with pytest.raises(ValueError):
+        corr(x, y, tail="error")
+    with pytest.raises(ValueError, match="must be 1D array"):
+        corr(x[:, None], y)
+    with pytest.raises(ValueError, match="same length"):
+        corr(x, y[:-1])
+    # Compare BF10 with JASP
+    df = read_dataset("pairwise_corr")
+    stats = corr(df["Neuroticism"], df["Extraversion"])
+    assert np.isclose(1 / float(stats.at["pearson", "BF10"]), 1.478e-13)
+    # Perfect correlation, CI and power should be 1, BF should be Inf
+    # https://github.com/raphaelvallat/pingouin/issues/195
+    stats = corr(x, x)
+    assert np.isclose(stats.at["pearson", "r"], 1)
+    assert np.isclose(stats.at["pearson", "power"], 1)
+
+    # Perfect correlation with percbend method
+    # https://github.com/raphaelvallat/pingouin/issues/453
+    stats = corr(x, x, method="percbend")  # calls _correl_pvalue
+    assert np.isclose(stats.at["percbend", "r"], 1)
+    assert np.isclose(stats.at["percbend", "p_val"], 0)
+    # Perfect correlation in the opposite direction of a one-sided test
+    assert corr(x, x, alternative="less").at["pearson", "p_val"] == 1
+    assert corr(x, -x, alternative="greater").at["pearson", "p_val"] == 1
+    assert corr(x, x, alternative="greater").at["pearson", "p_val"] == 0
+
+    # One-sided Kendall p-values use the Kendall null distribution, not a t-approximation
+    rng = np.random.default_rng(0)
+    xk = rng.normal(size=30)
+    yk = 0.3 * xk + rng.normal(size=30)
+    for alt in ["greater", "less"]:
+        pval = corr(xk, yk, method="kendall", alternative=alt).at["kendall", "p_val"]
+        assert np.isclose(pval, kendalltau(xk, yk, alternative=alt)[1])
+
+    # When one column is a constant, the correlation is not defined
+    # and Pingouin return a DataFrame full of NaN, except for ``n``
+    x, y = [1, 1, 1], [1, 2, 3]
+    with pytest.warns(RuntimeWarning, match="input array is constant"):
+        stats = corr(x, y)
+    assert stats.at["pearson", "n"]
+    assert np.isnan(stats.at["pearson", "r"])
+    # Biweight midcorrelation returns NaN when MAD is not defined
+    assert np.isnan(_bicor(np.array([1, 1, 1, 1, 0, 1]), np.arange(6))[0])
+
+
+def test_partial_corr():
+    """Test function partial_corr.
+
+    Compare with the R package ppcor (which is also used by JASP).
+    """
+    df = read_dataset("partial_corr")
+    #######################################################################
+    # PARTIAL CORRELATION
+    #######################################################################
+    # With one covariate
+    pc = partial_corr(data=df, x="x", y="y", covar="cv1")
+    assert round(pc.at["pearson", "r"], 7) == 0.5681692
+    assert round(pc.at["pearson", "p_val"], 9) == 0.001303059
+    # With two covariates
+    pc = partial_corr(data=df, x="x", y="y", covar=["cv1", "cv2"])
+    assert round(pc.at["pearson", "r"], 7) == 0.5344372
+    assert round(pc.at["pearson", "p_val"], 9) == 0.003392904
+    # With three covariates
+    # in R: pcor.test(x=df$x, y=df$y, z=df[, c("cv1", "cv2", "cv3")])
+    pc = partial_corr(data=df, x="x", y="y", covar=["cv1", "cv2", "cv3"])
+    assert round(pc.at["pearson", "r"], 7) == 0.4926007
+    assert round(pc.at["pearson", "p_val"], 9) == 0.009044164
+    # Method == "spearman"
+    pc = partial_corr(data=df, x="x", y="y", covar=["cv1", "cv2", "cv3"], method="spearman")
+    assert round(pc.at["spearman", "r"], 7) == 0.5209208
+    assert round(pc.at["spearman", "p_val"], 9) == 0.005336187
+
+    #######################################################################
+    # SEMI-PARTIAL CORRELATION
+    #######################################################################
+    # With one covariate
+    pc = partial_corr(data=df, x="x", y="y", y_covar="cv1")
+    assert round(pc.at["pearson", "r"], 7) == 0.5670793
+    assert round(pc.at["pearson", "p_val"], 9) == 0.001337718
+    # With two covariates
+    pc = partial_corr(data=df, x="x", y="y", y_covar=["cv1", "cv2"])
+    assert round(pc.at["pearson", "r"], 7) == 0.5097489
+    assert round(pc.at["pearson", "p_val"], 9) == 0.005589687
+    # With three covariates
+    # in R: spcor.test(x=df$x, y=df$y, z=df[, c("cv1", "cv2", "cv3")])
+    pc = partial_corr(data=df, x="x", y="y", y_covar=["cv1", "cv2", "cv3"])
+    assert round(pc.at["pearson", "r"], 7) == 0.4212351
+    assert round(pc.at["pearson", "p_val"], 8) == 0.02865483
+    # With three covariates (x_covar). Issue #387: y_covar=None should not raise
+    pc = partial_corr(data=df, x="x", y="y", x_covar=["cv1", "cv2", "cv3"])
+    assert round(pc.at["pearson", "r"], 7) == 0.4631883
+    assert round(pc.at["pearson", "p_val"], 8) == 0.01496857
+
+    # Method == "spearman"
+    pc = partial_corr(data=df, x="x", y="y", y_covar=["cv1", "cv2", "cv3"], method="spearman")
+    assert round(pc.at["spearman", "r"], 7) == 0.4597143
+    assert round(pc.at["spearman", "p_val"], 8) == 0.01584262
+
+    #######################################################################
+    # ERROR
+    #######################################################################
+    with pytest.raises(TypeError):
+        # TypeError: partial_corr() got an unexpected keyword argument 'tail'
+        partial_corr(data=df, x="x", y="y", covar="cv1", tail="error")
+    with pytest.raises(ValueError):
+        partial_corr(data=df, x="x", y="y", covar="cv2", x_covar="cv1")
+    with pytest.raises(ValueError):
+        partial_corr(data=df, x="x", y="y", x_covar="cv2", y_covar="cv1")
+    with pytest.raises(ValueError) as error_info:
+        partial_corr(data=df, x="cv1", y="y", covar=["cv1", "cv2"])
+    assert str(error_info.value) == "x and covar must be independent"
+    with pytest.raises(ValueError, match="y and covar must be independent"):
+        partial_corr(data=df, x="x", y="cv1", covar=["cv1", "cv2"])
+    with pytest.raises(ValueError, match="x and covar must be independent"):
+        partial_corr(data=df, x="x", y="y", covar="x")
+    with pytest.raises(ValueError, match="y and covar must be independent"):
+        partial_corr(data=df, x="x", y="y", covar="y")
+    with pytest.raises(ValueError, match="x and y must be independent"):
+        partial_corr(data=df, x="x", y="x", covar="cv1")
+    with pytest.raises(ValueError, match="not a valid choice for 'method'"):
+        partial_corr(data=df, x="x", y="y", covar="cv1", method="kendall")
+    with pytest.raises(TypeError, match="'data' must be a pandas DataFrame"):
+        partial_corr(data=df.to_numpy(), x="x", y="y", covar="cv1")
+    with pytest.raises(ValueError, match="at least 3 samples"):
+        partial_corr(data=df.iloc[:2], x="x", y="y", covar="cv1")
+    with pytest.raises(ValueError, match="columns are not in dataframe"):
+        partial_corr(data=df, x="x", y="y", covar="wrong")
+    with pytest.raises(ValueError, match="columns must be numeric"):
+        partial_corr(data=df.assign(cv1=df["cv1"].astype(str)), x="x", y="y", covar="cv1")
+    df_nan = df.copy()
+    df_nan.loc[2:, "cv1"] = np.nan
+    with pytest.raises(ValueError, match="at least 3 non-NAN samples"):
+        partial_corr(data=df_nan, x="x", y="y", covar="cv1")
+
+    # Issue #375: covariate numerically identical to x or y raises ValueError
+    df_375 = df.copy()
+    df_375["z"] = df["y"].values
+    with pytest.raises(ValueError, match="numerically identical to y"):
+        partial_corr(data=df_375, x="x", y="y", covar="z")
+    df_375["z"] = df["x"].values
+    with pytest.raises(ValueError, match="numerically identical to x"):
+        partial_corr(data=df_375, x="x", y="y", covar="z")
+
+    # Issue #435: rank-deficient covariance matrix (perfect multicollinearity) warns
+    df_435 = df.copy()
+    df_435["cv4"] = df["cv1"] + df["cv2"]  # Perfect linear combination
+    with pytest.warns(UserWarning, match="rank-deficient"):
+        partial_corr(data=df_435, x="x", y="y", covar=["cv1", "cv2", "cv4"])
+
+    # Issues #411, #509: numerical stability when variables differ by many orders of magnitude
+    rng = np.random.default_rng(42)
+    n = 22
+    covar_1 = rng.standard_normal(n)
+    covar_2_normal = rng.standard_normal(n)
+    covar_2_large = covar_2_normal * 1e4
+    x = rng.standard_normal(n) * 1e-4
+    y = covar_1 + rng.standard_normal(n)
+    df_normal = pd.DataFrame({"x": x, "y": y, "covar_1": covar_1, "covar_2": covar_2_normal})
+    df_large = pd.DataFrame({"x": x, "y": y, "covar_1": covar_1, "covar_2": covar_2_large})
+    pc_normal = partial_corr(data=df_normal, x="x", y="y", covar=["covar_1", "covar_2"])
+    pc_large = partial_corr(data=df_large, x="x", y="y", covar=["covar_1", "covar_2"])
+    assert np.isclose(pc_normal.at["pearson", "r"], pc_large.at["pearson", "r"], atol=1e-6)
+    assert np.isclose(pc_normal.at["pearson", "p_val"], pc_large.at["pearson", "p_val"], atol=1e-6)
+
+    # A constant variable (zero variance) returns NaN instead of failing
+    df_const = df_normal.assign(covar_1=1.0)
+    for method in ["pearson", "spearman"]:
+        for kwargs in [{"x": "covar_1", "covar": "covar_2"}, {"x": "x", "covar": "covar_1"}]:
+            stats = partial_corr(data=df_const, y="y", method=method, **kwargs)
+            assert stats.at[method, "n"] == n
+            assert np.isnan(stats.at[method, "r"])
+
+
+def test_rmcorr():
+    """Test function rm_corr"""
+    df = read_dataset("rm_corr")
+    # Test again rmcorr R package.
+    stats = rm_corr(data=df, x="pH", y="PacO2", subject="Subject").round(3)
+    assert stats.at["rm_corr", "r"] == -0.507
+    assert stats.at["rm_corr", "dof"] == 38
+    assert np.allclose(np.round(stats.at["rm_corr", "CI95"], 2), [-0.71, -0.23])
+    assert stats.at["rm_corr", "pval"] == 0.001
+    # Test with less than 3 subjects (same behavior as R package)
+    with pytest.raises(ValueError):
+        rm_corr(data=df[df["Subject"].isin([1, 2])], x="pH", y="PacO2", subject="Subject")
+    # Invalid inputs
+    with pytest.raises(TypeError, match="'data' must be a pandas DataFrame"):
+        rm_corr(data=df.to_numpy(), x="pH", y="PacO2", subject="Subject")
+    with pytest.raises(ValueError, match="The wrong column is not in data"):
+        rm_corr(data=df, x="pH", y="PacO2", subject="wrong")
+    with pytest.raises(ValueError, match="pH must be numeric"):
+        rm_corr(data=df.assign(pH=df["pH"].astype(str)), x="pH", y="PacO2", subject="Subject")
+
+
+def test_distance_corr():
+    """Test function distance_corr
+    We compare against the energy R package
+    """
+    a = [1, 2, 3, 4, 5]
+    b = [1, 2, 9, 4, 4]
+    dcor1 = distance_corr(a, b, n_boot=None)
+    dcor, pval = distance_corr(a, b, seed=9)
+    assert dcor1 == dcor
+    assert np.round(dcor, 7) == 0.7626762
+    assert 0.25 < pval < 0.40
+    _, pval_low = distance_corr(a, b, seed=9, alternative="less")
+    assert pval < pval_low
+    # With 2D arrays
+    rng = np.random.RandomState(123)
+    a = rng.random_sample((10, 10))
+    b = rng.random_sample((10, 10))
+    dcor, pval = distance_corr(a, b, n_boot=500, seed=9)
+    assert np.round(dcor, 5) == 0.87996
+    assert 0.20 < pval < 0.30
+
+    with pytest.raises(ValueError, match="same number of samples"):
+        distance_corr(a, b[:-1])
+    with pytest.raises(ValueError):
+        a[2, 4] = np.nan
+        distance_corr(a, b)
+
+
+def test_rcorr():
+    """Test function rcorr.
+
+    The multiple-comparison family must contain only the n * (n - 1) / 2 unique pairs (strict
+    upper triangle), not the diagonal / lower-triangle placeholders (GH #521). Adjusted
+    p-values are compared against statsmodels.
+    """
+    rng = np.random.default_rng(42)
+    frame = pd.DataFrame(rng.normal(size=(80, 5)))
+    # Inject real correlations so that the adjusted p-values do not all clip to 1
+    frame[1] += 0.4 * frame[0]
+    frame[3] -= 0.5 * frame[2]
+    frame_na = frame.copy()
+    frame_na.iloc[:5, 0] = np.nan
+    frame_na.iloc[10:15, 2] = np.nan
+    i, j = np.triu_indices(frame.shape[1], k=1)
+    # Pingouin -> statsmodels method names
+    padjusts = {
+        None: None,
+        "bonf": "bonferroni",
+        "sidak": "sidak",
+        "holm": "holm",
+        "fdr_bh": "fdr_bh",
+        "fdr_by": "fdr_by",
+    }
+    pval_stars = {0.001: "***", 0.01: "**", 0.05: "*"}
+
+    def to_stars(p):
+        for key, value in pval_stars.items():
+            if p < key:
+                return value
+        return ""
+
+    configs = product(["pearson", "spearman"], padjusts.items(), [frame, frame_na])
+    for method, (padjust, sm_method), data in configs:
+        corrfunc = pearsonr if method == "pearson" else spearmanr
+        raw = []
+        for a, b in zip(i, j, strict=True):
+            pair = data.iloc[:, [a, b]].dropna()
+            raw.append(corrfunc(pair.iloc[:, 0], pair.iloc[:, 1])[1])
+        raw = np.asarray(raw)
+        expected = raw if padjust is None else multipletests(raw, method=sm_method)[1]
+        # Numeric p-values on the upper triangle
+        actual = rcorr(data, method=method, padjust=padjust, stars=False, decimals=12)
+        actual = actual.to_numpy()[i, j].astype(float)
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+        # Stars: the fixture must contain both significant and non-significant pairs so that
+        # this is a positive check (an all-NaN or all-1 regression would fail it)
+        expected_stars = [to_stars(p) for p in expected]
+        assert "" in expected_stars and "***" in expected_stars
+        actual_stars = rcorr(data, method=method, padjust=padjust).to_numpy()[i, j]
+        assert actual_stars.tolist() == expected_stars
+
+    # Empty test family (constant column -> the only p-value is NaN): no correction method
+    # may flag the pair as significant (Sidak used to return 0 = 1 - (1 - nan) ** 0)
+    const = pd.DataFrame({"a": rng.normal(size=20), "b": np.ones(20)})
+    for padjust in padjusts:
+        assert rcorr(const, padjust=padjust).at["a", "b"] == ""
+        assert rcorr(const, padjust=padjust, stars=False).at["a", "b"] == "nan"
+
+    # Custom significance thresholds
+    custom = rcorr(frame, pval_stars={0.05: "sig"}).to_numpy()[i, j]
+    assert set(custom) <= {"", "sig"}
+    assert custom[0] == "sig"  # frame[1] is correlated with frame[0]
+    with pytest.raises(TypeError, match="'pval_stars' must be a dictionary"):
+        rcorr(frame, pval_stars=[0.05])
+    with pytest.raises(TypeError, match="'decimals' must be an integer"):
+        rcorr(frame, decimals=2.0)
+    with pytest.raises(ValueError, match="not a valid choice for 'method'"):
+        rcorr(frame, method="kendall")
+    with pytest.raises(ValueError, match="not a valid choice for 'upper'"):
+        rcorr(frame, upper="r")

@@ -1,0 +1,179 @@
+import numpy as np
+import pytest
+from pytest import approx
+from scipy.stats import pearsonr
+
+from pingouin.bayesian import bayesfactor_binom, bayesfactor_ttest
+from pingouin.bayesian import bayesfactor_pearson as bfp
+from pingouin.parametric import ttest
+
+rng = np.random.RandomState(1234)
+x = rng.normal(size=100)
+y = rng.normal(size=100)
+z = rng.normal(loc=0.5, size=100)
+v, w = rng.multivariate_normal([0, 0], [[1, 0.8], [0.8, 1]], 100).T
+
+
+def appr(x, rel=False, thresh=1e-3):
+    """
+    Assert that two numbers (or two sets of numbers) are equal to each other
+    within some tolerance.
+    """
+    if rel:
+        return approx(x, rel=thresh)
+    else:
+        return approx(x, abs=thresh)
+
+
+def test_bayesfactor_ttest():
+    """Test function bayesfactor_ttest."""
+    # check for approximate equality with 1e-3 tolerance
+    # (as this is how we store the values here)
+    assert bayesfactor_ttest(3.5, 20, 20) == appr(26.743)
+    assert bayesfactor_ttest(3.5, 20) == appr(17.185)
+    assert bayesfactor_ttest(3.5, 20, 1) == appr(17.185)
+    # Compare against BayesFactor::testBF
+    # >>> ttestBF(df$x, df$y, paired = FALSE, rscale = "medium")
+    assert ttest(x, y).at["T_test", "BF10"] == "0.183"
+    assert ttest(x, y, paired=True).at["T_test", "BF10"] == "0.135"
+    assert int(float(ttest(x, z).at["T_test", "BF10"])) == 1290
+    assert int(float(ttest(x, z, paired=True).at["T_test", "BF10"])) == 420
+    # Check with wrong T-value
+    assert np.isnan(bayesfactor_ttest(np.nan, 20, paired=True))
+    with pytest.raises(ValueError, match="One-sided tests are not supported"):
+        bayesfactor_ttest(3.5, 20, alternative="greater")
+    with pytest.raises(TypeError, match="'t' must be a real number"):
+        bayesfactor_ttest("3.5", 20)
+
+
+def test_bayesfactor_pearson():
+    """Test function bayesfactor_pearson."""
+    # Compare the analytical solution to JASP / R (method='ly')
+    # Similar to JASP with kappa=1, or correlationBF with rscale='wide'
+    # check for approximate equality with 1e-3 tolerance
+    # (as this is how we store the values here)
+    assert bfp(0.1, 83) == appr(0.204)
+    assert bfp(-0.1, 83) == appr(0.204)
+    assert bfp(0.1, 83, alternative="greater") == appr(0.332)
+    assert bfp(0.1, 83, alternative="less") == appr(0.076)
+    with pytest.raises(ValueError, match="is not a valid choice for 'method'"):
+        bfp(0.1, 83, method="wrong")
+    with pytest.raises(ValueError, match="r must be between -1 and 1"):
+        bfp(1.5, 83)
+
+    # Example 2. Compare with JASP.
+    r, _ = pearsonr(x, y)
+    n = 100
+    assert bfp(r, n) == appr(0.174)
+    assert bfp(r, n, alternative="greater") == appr(0.275)
+    with pytest.warns(UserWarning, match="not supported by the Wetzels"):
+        assert bfp(r, n, alternative="greater", method="wetzels") == appr(0.275)
+    assert bfp(r, n, alternative="less") == appr(0.073)
+    r, _ = pearsonr(v, w)
+    # relative tolerance here
+    assert bfp(r, n) == appr(2.321e22, rel=True)
+    assert bfp(r, n, alternative="greater") == appr(4.643e22, rel=True)
+    # assert bfp(r, n, alternative='less')) == 1.677e-26
+
+    # Compare the integral solving method (Wetzels)
+    # In R:
+    # >>> library(BayesFactor)
+    # >>> exp(linearReg.R2stat(N=20, p=1, R2=0.36, rscale = 1)[['bf']])
+    assert bfp(0.6, 20, method="wetzels") == appr(8.221)
+    assert bfp(-0.6, 20, method="wetzels") == appr(8.221)
+    assert bfp(0.6, 10, method="wetzels") == appr(1.278)
+
+    # Regression test for https://github.com/raphaelvallat/pingouin/issues/427
+    # When r is strongly negative, BF_greater must be near 0 (not spuriously large).
+    # Previously, catastrophic float64 cancellation caused BF_greater ~ 976 here.
+    assert bfp(-0.856, 64, alternative="greater") == appr(0.0)
+    assert bfp(-0.856, 64, alternative="less") == appr(
+        2 * bfp(-0.856, 64, alternative="two-sided"), rel=True
+    )
+    # Symmetry: BF_pos(r) == BF_neg(-r) and vice versa
+    assert bfp(0.856, 64, alternative="greater") == appr(
+        bfp(-0.856, 64, alternative="less"), rel=True
+    )
+    assert bfp(0.856, 64, alternative="less") == appr(
+        bfp(-0.856, 64, alternative="greater"), rel=True
+    )
+    # BF_pos + BF_neg == 2 * BF_10 (eq. 27-28 of Ly et al., 2016)
+    for r_val in [0.3, -0.3, 0.7, -0.7, -0.856]:
+        bf_two = bfp(r_val, 64, alternative="two-sided")
+        bf_pos = bfp(r_val, 64, alternative="greater")
+        bf_neg = bfp(r_val, 64, alternative="less")
+        assert bf_pos + bf_neg == appr(2 * bf_two, rel=True, thresh=1e-6)
+
+    # Wrong input
+    assert np.isnan(bfp(np.nan, 20))
+    assert np.isnan(bfp(0.8, 1))
+    assert np.isnan(bfp(np.inf, 1))
+    assert np.isinf(bfp(-1, 100))
+
+
+def test_bayesfactor_binom():
+    """Test function bayesfactor_binom.
+    Compare to http://pcl.missouri.edu/bf-binomial.
+    See also docstring of the function for a comparison with Wikipedia.
+    """
+
+    def bf10(x):
+        return approx(1 / x, rel=1e-5)
+
+    assert bayesfactor_binom(16, 20) == bf10(0.09703159)
+    assert bayesfactor_binom(16, 20, 0.8) == bf10(4.582187)
+    assert bayesfactor_binom(14, 20, a=6, b=4) == bf10(0.37901)
+    assert bayesfactor_binom(100, 1000, 0.1) == bf10(42.05881)
+    # NumPy integers are accepted
+    assert bayesfactor_binom(np.int64(16), np.int64(20)) == bf10(0.09703159)
+    with pytest.raises(ValueError, match=r"k \(successes\) cannot be higher than n \(trials\)\."):
+        bayesfactor_binom(5, 3)
+    # Invalid p
+    with pytest.raises(ValueError, match=r"'p' must be between 0 and 1\."):
+        bayesfactor_binom(5, 10, p=0)
+    with pytest.raises(ValueError, match=r"'p' must be between 0 and 1\."):
+        bayesfactor_binom(5, 10, p=1)
+    with pytest.raises(ValueError, match=r"'p' must be between 0 and 1\."):
+        bayesfactor_binom(5, 10, p=1.5)
+    with pytest.raises(TypeError, match=r"'p' must be a real number"):
+        bayesfactor_binom(5, 10, p="0.5")
+    with pytest.raises(TypeError, match=r"'p' must be a real number"):
+        bayesfactor_binom(5, 10, p=True)
+    # Invalid k
+    with pytest.raises(TypeError, match=r"'k' must be an integer, but received float\."):
+        bayesfactor_binom(2.5, 10)
+    with pytest.raises(TypeError, match=r"'k' must be an integer, but received bool\."):
+        bayesfactor_binom(True, 10)
+    with pytest.raises(ValueError, match=r"k \(successes\) must be positive or zero\."):
+        bayesfactor_binom(-1, 10)
+    # Invalid n
+    with pytest.raises(TypeError, match=r"'n' must be an integer, but received float\."):
+        bayesfactor_binom(5, 10.5)
+    with pytest.raises(TypeError, match=r"'n' must be an integer, but received bool\."):
+        bayesfactor_binom(5, True)
+    with pytest.raises(ValueError, match=r"n \(trials\) must be positive\."):
+        bayesfactor_binom(5, 0)
+    with pytest.raises(ValueError, match=r"n \(trials\) must be positive\."):
+        bayesfactor_binom(5, -5)
+    # Invalid a and b
+    with pytest.raises(ValueError, match=r"a must be positive\."):
+        bayesfactor_binom(5, 10, a=0)
+    with pytest.raises(ValueError, match=r"a must be positive\."):
+        bayesfactor_binom(5, 10, a=-1)
+    with pytest.raises(TypeError, match=r"'a' must be a real number, but received str\."):
+        bayesfactor_binom(5, 10, a="1")
+    with pytest.raises(TypeError, match=r"'a' must be a real number, but received bool\."):
+        bayesfactor_binom(5, 10, a=True)
+    with pytest.raises(ValueError, match=r"b must be positive\."):
+        bayesfactor_binom(5, 10, b=0)
+    with pytest.raises(ValueError, match=r"b must be positive\."):
+        bayesfactor_binom(5, 10, b=-1)
+    with pytest.raises(TypeError, match=r"'b' must be a real number, but received str\."):
+        bayesfactor_binom(5, 10, b="1")
+    with pytest.raises(TypeError, match=r"'b' must be a real number, but received bool\."):
+        bayesfactor_binom(5, 10, b=True)
+    # NaN priors are rejected
+    with pytest.raises(ValueError, match=r"a must be positive\."):
+        bayesfactor_binom(5, 10, a=np.nan)
+    with pytest.raises(ValueError, match=r"b must be positive\."):
+        bayesfactor_binom(5, 10, b=np.nan)

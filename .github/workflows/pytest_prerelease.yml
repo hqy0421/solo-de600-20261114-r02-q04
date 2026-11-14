@@ -1,0 +1,60 @@
+name: PyTest Pre-Release
+
+on:
+  schedule:
+    - cron: '0 3 * * SUN'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: 1
+  UV_SYSTEM_PYTHON: 1
+
+jobs:
+  # Scheduled only, so failures are reported (no continue-on-error) without blocking any PR
+  test-prerelease:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.14"]
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+      with:
+        enable-cache: true
+        prune-cache: false
+        cache-dependency-glob: pyproject.toml
+        cache-suffix: prerelease
+
+    - name: Install dependencies
+      run: |
+        uv pip install --group=dev .
+
+    # Nightly wheels of the scientific Python stack, and pre-releases from PyPI for the rest
+    # (e.g. seaborn). unsafe-best-match picks the newest version across both indexes.
+    - name: Install nightly and pre-release dependencies
+      run: >-
+        uv pip install --upgrade --pre
+        --index-url https://pypi.anaconda.org/scientific-python-nightly-wheels/simple
+        --extra-index-url https://pypi.org/simple
+        --index-strategy unsafe-best-match
+        numpy scipy pandas statsmodels scikit-learn matplotlib seaborn
+
+    - name: Display installed versions
+      run: |
+        uv pip list
+
+    - name: Test with pytest
+      # Use the environment with the pre-releases: `uv run` would sync a separate .venv
+      run: pytest --verbose

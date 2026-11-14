@@ -1,0 +1,504 @@
+.. -*- mode: rst -*-
+
+|
+
+.. image:: https://img.shields.io/pypi/v/pingouin.svg
+  :target: https://pypi.org/project/pingouin/
+
+.. image:: https://img.shields.io/conda/vn/conda-forge/pingouin.svg
+  :target: https://anaconda.org/conda-forge/pingouin
+
+.. image:: https://img.shields.io/github/license/raphaelvallat/pingouin.svg
+  :target: https://github.com/raphaelvallat/pingouin/blob/main/LICENSE
+
+.. image:: https://github.com/raphaelvallat/pingouin/actions/workflows/pytest.yml/badge.svg
+  :target: https://github.com/raphaelvallat/pingouin/actions
+
+.. image:: https://codecov.io/gh/raphaelvallat/pingouin/branch/main/graph/badge.svg
+    :target: https://codecov.io/gh/raphaelvallat/pingouin
+
+.. image:: https://pepy.tech/badge/pingouin/month
+    :target: https://pepy.tech/badge/pingouin/month
+
+.. image:: https://joss.theoj.org/papers/d2254e6d8e8478da192148e4cfbe4244/status.svg
+    :target: https://joss.theoj.org/papers/d2254e6d8e8478da192148e4cfbe4244
+
+
+----------------
+
+.. image:: https://raw.githubusercontent.com/raphaelvallat/pingouin/main/docs/pictures/logo_pingouin.png
+   :align:   center
+
+**Pingouin** is an open-source statistical package written in Python 3 and based mostly on Pandas and NumPy. Some of its main features are listed below. For a full list of available functions, please refer to the `API documentation <https://pingouin-stats.org/api.html>`_.
+
+1. ANOVAs: N-ways, repeated measures, mixed, ancova
+
+2. Pairwise post-hocs tests (parametric and non-parametric) and pairwise correlations
+
+3. Robust, partial, distance and repeated measures correlations
+
+4. Linear/logistic regression and mediation analysis
+
+5. Bayes Factors
+
+6. Multivariate tests
+
+7. Reliability and consistency
+
+8. Effect sizes and power analysis
+
+9. Parametric/bootstrapped confidence intervals around an effect size or a correlation coefficient
+
+10. Circular statistics
+
+11. Chi-squared tests
+
+12. Plotting: Bland-Altman plot, Q-Q plot, paired plot, robust correlation...
+
+Pingouin is designed for users who want **simple yet exhaustive statistical functions**.
+
+For example, the :code:`ttest_ind` function of SciPy returns only the T-value and the p-value. By contrast,
+the :code:`ttest` function of Pingouin returns the T-value, the p-value, the degrees of freedom, the effect size (Cohen's d), the 95% confidence intervals of the difference in means, the statistical power and the Bayes Factor (BF10) of the test.
+
+Documentation
+=============
+
+- `Link to documentation <https://pingouin-stats.org/index.html>`_
+
+Chat
+====
+
+If you have questions, please ask them in `GitHub Discussions <https://github.com/raphaelvallat/pingouin/discussions>`_.
+
+Installation
+============
+
+Dependencies
+------------
+
+The main dependencies of Pingouin are:
+
+* `NumPy <https://numpy.org/>`_ >= 2.2.2
+* `SciPy <https://www.scipy.org/>`_ >= 1.15.0
+* `Pandas <https://pandas.pydata.org/>`_ >= 2.3.0
+* `Matplotlib <https://matplotlib.org/>`_ >= 3.10.1
+* `Seaborn <https://seaborn.pydata.org/>`_ >= 0.13.2
+* `Scikit-learn <https://scikit-learn.org/>`_ >= 1.6.1
+* `Tabulate <https://github.com/astanin/python-tabulate>`_
+
+Some functions additionally require the following optional dependencies, which can be installed
+with ``pip install "pingouin[extras]"``:
+
+* `Statsmodels <https://www.statsmodels.org/>`_ >= 0.14.5: ``ancova``, ``rm_corr`` and
+  ``anova`` with unbalanced or N-way designs
+* `Mpmath <http://mpmath.org/>`_: one-sided ``bayesfactor_pearson``
+
+Pingouin is a Python 3 package and is currently tested for Python 3.11+.
+
+User installation
+-----------------
+
+Pingouin can be easily installed using `uv <https://docs.astral.sh/uv/>`_
+
+.. code-block:: shell
+
+  uv pip install pingouin
+
+pip
+
+.. code-block:: shell
+
+  pip install pingouin
+
+or conda
+
+.. code-block:: shell
+
+  conda install -c conda-forge pingouin
+
+New releases are frequent so always make sure that you have the latest version:
+
+.. code-block:: shell
+
+  uv pip install --upgrade pingouin
+
+Installation from source
+------------------------
+
+To build and install from source, clone this repository and install in editable mode with `uv <https://docs.astral.sh/uv/>`_
+
+.. code-block:: shell
+
+  git clone https://github.com/raphaelvallat/pingouin.git
+  cd pingouin
+  uv pip install --group=dev --editable .
+
+  # test the package
+  pytest --verbose
+
+Quick start
+============
+
+The `notebooks/ <https://github.com/raphaelvallat/pingouin/tree/main/notebooks>`_ folder contains a collection of Jupyter notebooks showing the main functionalities of Pingouin.
+
+10 minutes to Pingouin
+----------------------
+
+1. T-test
+#########
+
+.. code-block:: python
+
+  import numpy as np
+  import pingouin as pg
+
+  np.random.seed(123)
+  mean, cov, n = [4, 5], [(1, .6), (.6, 1)], 30
+  x, y = np.random.multivariate_normal(mean, cov, n).T
+
+  # T-test
+  pg.ttest(x, y)
+
+.. table:: Output
+   :widths: auto
+
+   ======  =====  =============  =======  =============  =========  =======  ======
+        T    dof  alternative      p_val  CI95             cohen_d    power    BF10
+   ======  =====  =============  =======  =============  =========  =======  ======
+   -3.401     58  two-sided        0.001  [-1.68 -0.43]      0.878    0.917  26.155
+   ======  =====  =============  =======  =============  =========  =======  ======
+
+------------
+
+2. Pearson's correlation
+########################
+
+.. code-block:: python
+
+  pg.corr(x, y)
+
+.. table:: Output
+   :widths: auto
+
+   ===  =====  ===========  =======  ======  =======
+     n      r  CI95           p_val    BF10    power
+   ===  =====  ===========  =======  ======  =======
+    30  0.595  [0.3  0.79]    0.001  69.723    0.950
+   ===  =====  ===========  =======  ======  =======
+
+------------
+
+3. Robust correlation
+#####################
+
+.. code-block:: python
+
+  # Introduce an outlier
+  x[5] = 18
+  # Use the robust biweight midcorrelation
+  pg.corr(x, y, method="bicor")
+
+.. table:: Output
+   :widths: auto
+
+   ===  =====  ===========  =======  =======
+     n      r  CI95           p_val    power
+   ===  =====  ===========  =======  =======
+    30  0.576  [0.27 0.78]    0.001    0.933
+   ===  =====  ===========  =======  =======
+
+------------
+
+4. Test the normality of the data
+#################################
+
+The `pingouin.normality` function works with lists, arrays, or pandas DataFrame in wide or long-format.
+
+.. code-block:: python
+
+   print(pg.normality(x))                                    # Univariate normality
+   print(pg.multivariate_normality(np.column_stack((x, y)))) # Multivariate normality
+
+.. table:: Output
+  :widths: auto
+
+  =====  ======  ========
+      W    pval    normal
+  =====  ======  ========
+  0.615   0.000  False
+  =====  ======  ========
+
+.. parsed-literal::
+
+   HZResults(hz=1.697, pval=0.00018, normal=False)
+
+------------
+
+5. One-way ANOVA using a pandas DataFrame
+#########################################
+
+.. code-block:: python
+
+  # Read an example dataset
+  df = pg.read_dataset('mixed_anova')
+
+  # Run the ANOVA
+  aov = pg.anova(data=df, dv='Scores', between='Group', detailed=True)
+  print(aov)
+
+.. table:: Output
+  :widths: auto
+
+  ========  =======  ====  =====  =======  =======  =======
+  Source         SS    DF     MS        F    p_unc      np2
+  ========  =======  ====  =====  =======  =======  =======
+  Group       5.460     1  5.460    5.244    0.023    0.029
+  Within    185.343   178  1.041      nan      nan      nan
+  ========  =======  ====  =====  =======  =======  =======
+
+------------
+
+6. Repeated measures ANOVA
+##########################
+
+.. code-block:: python
+
+  pg.rm_anova(data=df, dv='Scores', within='Time', subject='Subject', detailed=True)
+
+.. table:: Output
+  :widths: auto
+
+  ========  =======  ====  =====  =======  =======  =======  =======
+  Source         SS    DF     MS        F    p_unc      ng2      eps
+  ========  =======  ====  =====  =======  =======  =======  =======
+  Time        7.628     2  3.814    3.913    0.023     0.04    0.999
+  Error     115.027   118  0.975      nan      nan      nan      nan
+  ========  =======  ====  =====  =======  =======  =======  =======
+
+------------
+
+7. Post-hoc tests corrected for multiple-comparisons
+####################################################
+
+.. code-block:: python
+
+  # FDR-corrected post hocs with Hedges'g effect size
+  posthoc = pg.pairwise_tests(data=df, dv='Scores', within='Time', subject='Subject',
+                               parametric=True, padjust='fdr_bh', effsize='hedges')
+
+  # Pretty printing of table
+  pg.print_table(posthoc, floatfmt='.3f')
+
+.. table:: Output
+  :widths: auto
+
+  ==========  =======  =======  ========  ============  ======  ======  =============  =======  ========  ==========  ======  ========
+  Contrast    A        B        Paired    Parametric         T     dof  alternative      p_unc    p_corr  p_adjust      BF10    hedges
+  ==========  =======  =======  ========  ============  ======  ======  =============  =======  ========  ==========  ======  ========
+  Time        August   January  True      True          -1.740  59.000  two-sided        0.087     0.131  fdr_bh       0.582    -0.328
+  Time        August   June     True      True          -2.743  59.000  two-sided        0.008     0.024  fdr_bh       4.232    -0.483
+  Time        January  June     True      True          -1.024  59.000  two-sided        0.310     0.310  fdr_bh       0.232    -0.170
+  ==========  =======  =======  ========  ============  ======  ======  =============  =======  ========  ==========  ======  ========
+
+------------
+
+8. Two-way mixed ANOVA
+######################
+
+.. code-block:: python
+
+  # Compute the two-way mixed ANOVA
+  aov = pg.mixed_anova(data=df, dv='Scores', between='Group', within='Time',
+                       subject='Subject', correction=False, effsize="np2")
+  pg.print_table(aov)
+
+.. table:: Output
+  :widths: auto
+
+  ===========  =====  =====  =====  =====  =====  =======  =====  =======
+  Source          SS    DF1    DF2     MS      F    p_unc    np2      eps
+  ===========  =====  =====  =====  =====  =====  =======  =====  =======
+  Group        5.460      1     58  5.460  5.052    0.028  0.080      nan
+  Time         7.628      2    116  3.814  4.027    0.020  0.065    0.998
+  Interaction  5.167      2    116  2.584  2.728    0.070  0.045    0.998
+  ===========  =====  =====  =====  =====  =====  =======  =====  =======
+
+------------
+
+9. Pairwise correlations between columns of a dataframe
+#######################################################
+
+.. code-block:: python
+
+  import pandas as pd
+  np.random.seed(123)
+  z = np.random.normal(5, 1, 30)
+  data = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
+  pg.pairwise_corr(data, columns=['X', 'Y', 'Z'], method='pearson')
+
+.. table:: Output
+  :widths: auto
+
+  ===  ===  ========  =============  ===  =====  =============  =======  ======  =======
+  X    Y    method    alternative      n      r  CI95             p_unc    BF10    power
+  ===  ===  ========  =============  ===  =====  =============  =======  ======  =======
+  X    Y    pearson   two-sided       30  0.366  [0.01 0.64]      0.047   1.500    0.525
+  X    Z    pearson   two-sided       30  0.251  [-0.12  0.56]    0.181   0.534    0.272
+  Y    Z    pearson   two-sided       30  0.020  [-0.34  0.38]    0.916   0.228    0.051
+  ===  ===  ========  =============  ===  =====  =============  =======  ======  =======
+
+------------
+
+10.  Pairwise T-test between columns of a dataframe
+###################################################
+
+.. code-block:: python
+
+    data.ptests(paired=True, stars=False)
+
+.. table:: Pairwise T-tests, with T-values on the lower triangle and p-values on the upper triangle
+  :widths: auto
+
+  ====  ======  ======  =====
+  ..    X       Y       Z
+  ====  ======  ======  =====
+  X     -       0.226   0.165
+  Y     -1.238  -       0.658
+  Z     -1.424  -0.447  -
+  ====  ======  ======  =====
+
+------------
+
+11. Multiple linear regression
+##############################
+
+.. code-block:: python
+
+    pg.linear_regression(data[['X', 'Z']], data['Y'])
+
+.. table:: Linear regression summary
+  :widths: auto
+
+  =========  ======  =====  ======  ======  =====  ========  ==========  ===========
+  names        coef     se       T    pval     r2    adj_r2       CI2.5       CI97.5
+  =========  ======  =====  ======  ======  =====  ========  ==========  ===========
+  Intercept   4.650  0.841   5.530   0.000  0.139     0.076       2.925        6.376
+  X           0.143  0.068   2.089   0.046  0.139     0.076       0.003        0.283
+  Z          -0.069  0.167  -0.416   0.681  0.139     0.076      -0.412        0.273
+  =========  ======  =====  ======  ======  =====  ========  ==========  ===========
+
+------------
+
+12. Mediation analysis
+######################
+
+.. code-block:: python
+
+    pg.mediation_analysis(data=data, x='X', m='Z', y='Y', seed=42, n_boot=1000)
+
+.. table:: Mediation summary
+  :widths: auto
+
+  ========  ======  =====  ======  ==========  ===========  =====
+  path        coef     se    pval       CI2.5       CI97.5  sig
+  ========  ======  =====  ======  ==========  ===========  =====
+  Z ~ X      0.103  0.075   0.181      -0.051        0.256  No
+  Y ~ Z      0.018  0.171   0.916      -0.332        0.369  No
+  Total      0.136  0.065   0.047       0.002        0.269  Yes
+  Direct     0.143  0.068   0.046       0.003        0.283  Yes
+  Indirect  -0.007  0.025   0.898      -0.069        0.029  No
+  ========  ======  =====  ======  ==========  ===========  =====
+
+------------
+
+13. Contingency analysis
+########################
+
+.. code-block:: python
+
+    data = pg.read_dataset('chi2_independence')
+    expected, observed, stats = pg.chi2_independence(data, x='sex', y='target')
+    stats
+
+.. table:: Chi-squared tests summary
+  :widths: auto
+
+  ==================  ========  ======  =====  =====  ========  =======
+  test                  lambda    chi2    dof   pval    cramer    power
+  ==================  ========  ======  =====  =====  ========  =======
+  pearson                1.000  22.717  1.000  0.000     0.274    0.997
+  cressie-read           0.667  22.931  1.000  0.000     0.275    0.998
+  log-likelihood         0.000  23.557  1.000  0.000     0.279    0.998
+  freeman-tukey         -0.500  24.220  1.000  0.000     0.283    0.998
+  mod-log-likelihood    -1.000  25.071  1.000  0.000     0.288    0.999
+  neyman                -2.000  27.458  1.000  0.000     0.301    0.999
+  ==================  ========  ======  =====  =====  ========  =======
+
+Integration with Pandas
+-----------------------
+
+Several functions of Pingouin can be used directly as pandas DataFrame methods. Try for yourself with the code below:
+
+.. code-block:: python
+
+  import pingouin as pg
+
+  # Example 1 | ANOVA
+  df = pg.read_dataset('mixed_anova')
+  df.anova(dv='Scores', between='Group', detailed=True)
+
+  # Example 2 | Pairwise correlations
+  data = pg.read_dataset('mediation')
+  data.pairwise_corr(columns=['X', 'M', 'Y'], covar=['Mbin'])
+
+  # Example 3 | Partial correlation matrix
+  data.pcorr()
+
+The functions that are currently supported as pandas method are:
+
+* ANOVAs: `anova <https://pingouin-stats.org/generated/pingouin.anova.html>`_, `ancova <https://pingouin-stats.org/generated/pingouin.ancova.html>`_, `rm_anova <https://pingouin-stats.org/generated/pingouin.rm_anova.html>`_, `mixed_anova <https://pingouin-stats.org/generated/pingouin.mixed_anova.html>`_, `welch_anova <https://pingouin-stats.org/generated/pingouin.welch_anova.html>`_
+* Non-parametric: `kruskal <https://pingouin-stats.org/generated/pingouin.kruskal.html>`_, `friedman <https://pingouin-stats.org/generated/pingouin.friedman.html>`_, `cochran <https://pingouin-stats.org/generated/pingouin.cochran.html>`_
+* Post-hocs: `pairwise_tests <https://pingouin-stats.org/generated/pingouin.pairwise_tests.html>`_, `pairwise_tukey <https://pingouin-stats.org/generated/pingouin.pairwise_tukey.html>`_, `pairwise_gameshowell <https://pingouin-stats.org/generated/pingouin.pairwise_gameshowell.html>`_, `ptests <https://pingouin-stats.org/generated/pingouin.ptests.html>`_
+* Correlations: `pairwise_corr <https://pingouin-stats.org/generated/pingouin.pairwise_corr.html>`_, `partial_corr <https://pingouin-stats.org/generated/pingouin.partial_corr.html>`_, `pcorr <https://pingouin-stats.org/generated/pingouin.pcorr.html>`_, `rcorr <https://pingouin-stats.org/generated/pingouin.rcorr.html>`_, `rm_corr <https://pingouin-stats.org/generated/pingouin.rm_corr.html>`_
+* Distribution: `normality <https://pingouin-stats.org/generated/pingouin.normality.html>`_, `homoscedasticity <https://pingouin-stats.org/generated/pingouin.homoscedasticity.html>`_, `sphericity <https://pingouin-stats.org/generated/pingouin.sphericity.html>`_, `epsilon <https://pingouin-stats.org/generated/pingouin.epsilon.html>`_, `box_m <https://pingouin-stats.org/generated/pingouin.box_m.html>`_
+* Contingency: `chi2_independence <https://pingouin-stats.org/generated/pingouin.chi2_independence.html>`_, `chi2_mcnemar <https://pingouin-stats.org/generated/pingouin.chi2_mcnemar.html>`_, `dichotomous_crosstab <https://pingouin-stats.org/generated/pingouin.dichotomous_crosstab.html>`_
+* Regression: `linear_regression <https://pingouin-stats.org/generated/pingouin.linear_regression.html>`_, `logistic_regression <https://pingouin-stats.org/generated/pingouin.logistic_regression.html>`_, `mediation_analysis <https://pingouin-stats.org/generated/pingouin.mediation_analysis.html>`_
+* Reliability: `cronbach_alpha <https://pingouin-stats.org/generated/pingouin.cronbach_alpha.html>`_, `intraclass_corr <https://pingouin-stats.org/generated/pingouin.intraclass_corr.html>`_
+
+Contributing
+============
+
+Pingouin was created and is maintained by `Raphael Vallat <https://raphaelvallat.github.io>`_, mostly during his spare time. Contributions are more than welcome so feel free to contact me, open an issue or submit a pull request!
+
+To see the code or report a bug, please visit the `GitHub repository <https://github.com/raphaelvallat/pingouin>`_.
+
+This program is provided with NO WARRANTY OF ANY KIND. Pingouin is still under heavy development and there are likely hidden bugs. Always double check the results with another statistical software.
+
+**Contributors**
+
+- Nicolas Legrand
+- `Richard Höchenberger <http://hoechenberger.net/>`_
+- `Arthur Paulino <https://github.com/arthurpaulino>`_
+- `Eelke Spaak <https://eelkespaak.nl/>`_
+- `Johannes Elfner <https://www.linkedin.com/in/johannes-elfner/>`_
+- `Stefan Appelhoff <https://stefanappelhoff.com>`_
+
+How to cite Pingouin?
+=====================
+
+If you want to cite Pingouin, please use the publication in JOSS:
+
+* Vallat, R. (2018). Pingouin: statistics in Python. *Journal of Open Source Software*, 3(31), 1026, `https://doi.org/10.21105/joss.01026 <https://doi.org/10.21105/joss.01026>`_
+
+Acknowledgement
+===============
+
+Several functions of Pingouin were inspired from R or Matlab toolboxes, including:
+
+- `effsize package (R) <https://cran.r-project.org/web/packages/effsize/effsize.pdf>`_
+- `ezANOVA package (R) <https://cran.r-project.org/web/packages/ez/ez.pdf>`_
+- `pwr package (R) <https://cran.r-project.org/web/packages/pwr/pwr.pdf>`_
+- `circular statistics (Matlab) <https://www.mathworks.com/matlabcentral/fileexchange/10676-circular-statistics-toolbox-directional-statistics>`_
+- `robust correlations (Matlab) <https://sourceforge.net/projects/robustcorrtool/>`_
+- `repeated-measure correlation (R) <https://cran.r-project.org/web/packages/rmcorr/index.html>`_
+- `real-statistics.com <https://www.real-statistics.com/>`_
