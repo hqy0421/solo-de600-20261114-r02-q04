@@ -13,6 +13,7 @@ Unreleased
 
 **New features**
 
+- :py:func:`pingouin.spline_calibration`: monotonic spline calibration with known, possibly heterogeneous and correlated, measurement errors in **both** variables (errors-in-variables model). The fitted object converts readings forward (new instrument -> reference) and backward (reference -> new instrument) with confidence intervals that include the calibration uncertainty, and flags readings outside the calibration range.
 - :py:func:`pingouin.corr`: new ``seed`` argument for the bootstrap of the Shepherd's pi correlation (``method="shepherd"``). Without it, the global NumPy random state is used, as before.
 
 **Breaking changes**

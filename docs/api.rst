@@ -35,6 +35,17 @@ Bayesian
    bayesfactor_ttest
    bayesfactor_pearson
 
+.. _calibration:
+
+Calibration
+-----------
+
+.. autosummary::
+   :toctree: generated/
+
+   spline_calibration
+   SplineCalibration
+
 .. _circular:
 
 Circular

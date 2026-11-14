@@ -1,6 +1,7 @@
 # Import pingouin objects
 from .utils import *
 from .bayesian import *
+from .calibration import *
 from .datasets import *
 from .distribution import *
 from .effsize import *
